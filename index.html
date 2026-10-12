@@ -43,6 +43,10 @@
   }
   button:disabled { background: #b5e8c4; cursor: not-allowed; }
   #info { margin-top: 10px; font-size: .85rem; color: #667781; min-height: 1.2em; }
+  #result a {
+    display: inline-block; margin-top: 12px; padding: 12px 18px; background: #128c7e; color: #fff;
+    border-radius: 24px; text-decoration: none; font-weight: 600;
+  }
 </style>
 </head>
 <body>
@@ -66,8 +70,9 @@
     <label id="outline-label"><input type="checkbox" id="outline"> Contorno branco</label>
   </div>
 
-  <button id="save" disabled>Baixar figurinha</button>
+  <button id="save" disabled>Gerar figurinha</button>
   <div id="info"></div>
+  <div id="result"></div>
 </div>
 
 <script>
@@ -78,6 +83,7 @@
   const wrap = document.getElementById('preview-wrap');
   const saveBtn = document.getElementById('save');
   const info = document.getElementById('info');
+  const result = document.getElementById('result');
   const outlineChk = document.getElementById('outline');
   const outlineLabel = document.getElementById('outline-label');
   const SIZE = 512;
@@ -92,6 +98,7 @@
   // ---------- carregar ----------
   function loadFile(file) {
     if (!file) return;
+    result.innerHTML = '';
 
     if (file.type === 'image/gif') {
       if (animUrl) URL.revokeObjectURL(animUrl);
@@ -241,9 +248,10 @@
     return { blob: new Blob([data], { type: 'image/webp' }), used };
   }
 
-  // ---------- salvar ----------
+  // ---------- gerar ----------
   saveBtn.addEventListener('click', async () => {
     saveBtn.disabled = true;
+    result.innerHTML = '';
     try {
       const mode = document.querySelector('input[name="mode"]:checked').value;
 
@@ -253,7 +261,7 @@
         info.textContent = blob.size <= MAX_ANIM
           ? `Pronto! Animada, ${kb} KB, ${used.fps} fps.`
           : `Ficou com ${kb} KB (acima de 500 KB). Tente um GIF menor ou mais curto.`;
-        download(blob, 'figurinha.webp');
+        showDownload(blob, 'figurinha.webp');
       } else {
         const out = document.createElement('canvas');
         out.width = out.height = SIZE;
@@ -269,14 +277,14 @@
 
         if (!webp) {
           blob = await new Promise(r => out.toBlob(r, 'image/png'));
-          info.textContent = 'Seu navegador não gerou WebP; baixei em PNG (pode não funcionar no WhatsApp).';
-          download(blob, 'figurinha.png');
+          info.textContent = 'Seu navegador não gerou WebP; a figurinha saiu em PNG (pode não funcionar no WhatsApp).';
+          showDownload(blob, 'figurinha.png');
         } else {
           const kb = (blob.size / 1024).toFixed(0);
           info.textContent = blob.size <= MAX_STATIC
             ? `Pronto! ${kb} KB, 512×512 WebP.`
             : `Ficou com ${kb} KB (acima de 100 KB). Tente "Ajustar" ou uma imagem menor.`;
-          download(blob, 'figurinha.webp');
+          showDownload(blob, 'figurinha.webp');
         }
       }
     } catch (err) {
@@ -287,14 +295,15 @@
     }
   });
 
-  function download(blob, name) {
+  // Mostra um botão para tocar e salvar (mais confiável no celular do que download automático)
+  function showDownload(blob, name) {
+    const url = URL.createObjectURL(blob);
+    result.innerHTML = '';
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
+    a.href = url;
     a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    a.textContent = `⬇️ Toque aqui para salvar ${name}`;
+    result.appendChild(a);
   }
 </script>
 </body>
