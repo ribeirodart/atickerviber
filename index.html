@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fazedor de Figurinhas</title>
+<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+<script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start;
+    padding: 24px 16px; background: #e9edef; font-family: system-ui, -apple-system, sans-serif; color: #111b21;
+  }
+  .card {
+    background: #fff; border-radius: 16px; padding: 24px; width: 100%; max-width: 440px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.1); text-align: center;
+  }
+  h1 { font-size: 1.3rem; margin: 0 0 16px; }
+  #drop {
+    border: 2px dashed #25d366; border-radius: 12px; padding: 24px 12px;
+    color: #54656f; transition: background .2s;
+  }
+  #drop.over { background: #e7fce3; }
+  #drop small { display: block; margin-top: 8px; color: #8696a0; }
+  #file { display: block; margin: 0 auto; max-width: 100%; }
+  #preview-wrap {
+    margin: 20px auto 0; width: 256px; height: 256px; border-radius: 12px;
+    background-color: #fff;
+    background-image: linear-gradient(45deg,#ddd 25%,transparent 25%),linear-gradient(-45deg,#ddd 25%,transparent 25%),
+                      linear-gradient(45deg,transparent 75%,#ddd 75%),linear-gradient(-45deg,transparent 75%,#ddd 75%);
+    background-size: 20px 20px; background-position: 0 0,0 10px,10px -10px,-10px 0;
+    display: none; overflow: hidden;
+  }
+  #preview, #anim-preview { width: 100%; height: 100%; display: block; object-fit: contain; }
+  #anim-preview { display: none; }
+  .opts { margin: 16px 0; display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; font-size: .95rem; }
+  .opts label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .opts label.disabled { opacity: .4; cursor: not-allowed; }
+  button {
+    background: #25d366; color: #fff; border: 0; border-radius: 24px; padding: 12px 24px;
+    font-size: 1rem; font-weight: 600; cursor: pointer; width: 100%;
+  }
+  button:disabled { background: #b5e8c4; cursor: not-allowed; }
+  #info { margin-top: 10px; font-size: .85rem; color: #667781; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🖼️ Fazedor de Figurinhas</h1>
+
+  <div id="drop">
+    <p style="margin:0 0 10px">Escolha uma imagem ou GIF</p>
+    <input type="file" id="file" accept="image/*,.gif">
+    <small>ou arraste / cole (Ctrl+V)</small>
+  </div>
+
+  <div id="preview-wrap">
+    <canvas id="preview" width="512" height="512"></canvas>
+    <img id="anim-preview" alt="prévia do GIF">
+  </div>
+
+  <div class="opts">
+    <label><input type="radio" name="mode" value="fit" checked> Ajustar (sem cortar)</label>
+    <label><input type="radio" name="mode" value="crop"> Preencher (corta)</label>
+    <label id="outline-label"><input type="checkbox" id="outline"> Contorno branco</label>
+  </div>
+
+  <button id="save" disabled>Baixar figurinha</button>
+  <div id="info"></div>
+</div>
+
+<script>
+  const drop = document.getElementById('drop');
+  const fileInput = document.getElementById('file');
+  const canvas = document.getElementById('preview');
+  const animPreview = document.getElementById('anim-preview');
+  const wrap = document.getElementById('preview-wrap');
+  const saveBtn = document.getElementById('save');
+  const info = document.getElementById('info');
+  const outlineChk = document.getElementById('outline');
+  const outlineLabel = document.getElementById('outline-label');
+  const SIZE = 512;
+  const MAX_STATIC = 100 * 1024;  // figurinha estática
+  const MAX_ANIM = 500 * 1024;    // figurinha animada
+  const MAX_ANIM_SECONDS = 10;
+
+  let img = null;        // imagem estática
+  let animFile = null;   // GIF
+  let animUrl = null;
+
+  // ---------- carregar ----------
+  function loadFile(file) {
+    if (!file) return;
+
+    if (file.type === 'image/gif') {
+      if (animUrl) URL.revokeObjectURL(animUrl);
+      animFile = file;
+      img = null;
+      animUrl = URL.createObjectURL(file);
+      animPreview.src = animUrl;
+      animPreview.style.display = 'block';
+      canvas.style.display = 'none';
+      wrap.style.display = 'block';
+      outlineChk.checked = false;
+      outlineChk.disabled = true;
+      outlineLabel.classList.add('disabled');
+      saveBtn.disabled = false;
+      info.textContent = 'GIF pronto: será convertido em figurinha animada (até 10 s).';
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      info.textContent = 'Esse arquivo não é imagem nem GIF.';
+      return;
+    }
+
+    const url = URL.createObjectURL(file);
+    const i = new Image();
+    i.onload = () => {
+      img = i;
+      animFile = null;
+      URL.revokeObjectURL(url);
+      animPreview.style.display = 'none';
+      canvas.style.display = 'block';
+      wrap.style.display = 'block';
+      outlineChk.disabled = false;
+      outlineLabel.classList.remove('disabled');
+      saveBtn.disabled = false;
+      info.textContent = '';
+      render();
+    };
+    i.onerror = () => { info.textContent = 'Não consegui abrir essa imagem.'; URL.revokeObjectURL(url); };
+    i.src = url;
+  }
+
+  fileInput.addEventListener('change', () => loadFile(fileInput.files[0]));
+
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); drop.classList.add('over');
+  }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); drop.classList.remove('over');
+  }));
+  drop.addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
+
+  document.addEventListener('paste', e => {
+    const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
+    if (item) loadFile(item.getAsFile());
+  });
+
+  document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', render));
+  outlineChk.addEventListener('change', render);
+
+  // ---------- estático: canvas 512x512 ----------
+  function drawSticker(target) {
+    const tctx = target.getContext('2d');
+    tctx.clearRect(0, 0, SIZE, SIZE);
+
+    const mode = document.querySelector('input[name="mode"]:checked').value;
+    const scale = mode === 'fit'
+      ? Math.min(SIZE / img.width, SIZE / img.height)
+      : Math.max(SIZE / img.width, SIZE / img.height);
+    const w = img.width * scale, h = img.height * scale;
+    const x = (SIZE - w) / 2, y = (SIZE - h) / 2;
+
+    if (outlineChk.checked) {
+      const tmp = document.createElement('canvas');
+      tmp.width = tmp.height = SIZE;
+      const t = tmp.getContext('2d');
+      t.drawImage(img, x, y, w, h);
+      t.globalCompositeOperation = 'source-in';
+      t.fillStyle = '#fff';
+      t.fillRect(0, 0, SIZE, SIZE);
+
+      const thick = Math.round(SIZE * 0.025);
+      for (let a = 0; a < 360; a += 15) {
+        const rad = a * Math.PI / 180;
+        tctx.drawImage(tmp, Math.cos(rad) * thick, Math.sin(rad) * thick);
+      }
+    }
+    tctx.drawImage(img, x, y, w, h);
+  }
+
+  function render() {
+    if (!img) return;
+    canvas.width = canvas.height = SIZE;
+    drawSticker(canvas);
+  }
+
+  function toBlob(c, quality) {
+    return new Promise(resolve => c.toBlob(resolve, 'image/webp', quality));
+  }
+
+  // ---------- animado: ffmpeg.wasm ----------
+  let ff = null;
+  async function getFFmpeg() {
+    if (ff) return ff;
+    const { FFmpeg } = FFmpegWASM;
+    const { toBlobURL } = FFmpegUtil;
+    ff = new FFmpeg();
+    const base = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+    await ff.load({
+      coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript'),
+      wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
+    });
+    return ff;
+  }
+
+  async function encodeAnimated(file, mode) {
+    const f = await getFFmpeg();
+    const { fetchFile } = FFmpegUtil;
+    await f.writeFile('in.gif', await fetchFile(file));
+
+    const scaleFilter = mode === 'fit'
+      ? 'scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000'
+      : 'scale=512:512:force_original_aspect_ratio=increase,crop=512:512';
+
+    // tenta combinações de fps/qualidade até caber em 500 KB
+    const attempts = [[15, 70], [12, 55], [10, 40], [8, 30], [6, 20]];
+    let data = null, used = null;
+    for (const [fps, q] of attempts) {
+      info.textContent = `Convertendo… (fps ${fps}, qualidade ${q})`;
+      await f.exec([
+        '-i', 'in.gif',
+        '-t', String(MAX_ANIM_SECONDS),
+        '-vf', `${scaleFilter},fps=${fps}`,
+        '-c:v', 'libwebp',
+        '-lossless', '0',
+        '-q:v', String(q),
+        '-loop', '0',
+        '-an',
+        'out.webp',
+      ]);
+      data = await f.readFile('out.webp');
+      used = { fps, q };
+      if (data.length <= MAX_ANIM) break;
+    }
+    await f.deleteFile('in.gif');
+    await f.deleteFile('out.webp');
+    return { blob: new Blob([data], { type: 'image/webp' }), used };
+  }
+
+  // ---------- salvar ----------
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    try {
+      const mode = document.querySelector('input[name="mode"]:checked').value;
+
+      if (animFile) {
+        const { blob, used } = await encodeAnimated(animFile, mode);
+        const kb = (blob.size / 1024).toFixed(0);
+        info.textContent = blob.size <= MAX_ANIM
+          ? `Pronto! Animada, ${kb} KB, ${used.fps} fps.`
+          : `Ficou com ${kb} KB (acima de 500 KB). Tente um GIF menor ou mais curto.`;
+        download(blob, 'figurinha.webp');
+      } else {
+        const out = document.createElement('canvas');
+        out.width = out.height = SIZE;
+        drawSticker(out);
+
+        let blob = null, q = 1.0, webp = true;
+        while (q >= 0.3) {
+          blob = await toBlob(out, q);
+          if (!blob) { webp = false; break; }
+          if (blob.size <= MAX_STATIC) break;
+          q -= 0.1;
+        }
+
+        if (!webp) {
+          blob = await new Promise(r => out.toBlob(r, 'image/png'));
+          info.textContent = 'Seu navegador não gerou WebP; baixei em PNG (pode não funcionar no WhatsApp).';
+          download(blob, 'figurinha.png');
+        } else {
+          const kb = (blob.size / 1024).toFixed(0);
+          info.textContent = blob.size <= MAX_STATIC
+            ? `Pronto! ${kb} KB, 512×512 WebP.`
+            : `Ficou com ${kb} KB (acima de 100 KB). Tente "Ajustar" ou uma imagem menor.`;
+          download(blob, 'figurinha.webp');
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      info.textContent = 'Deu erro na conversão. Veja o console (F12) para detalhes.';
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  function download(blob, name) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+</script>
+</body>
+</html>
